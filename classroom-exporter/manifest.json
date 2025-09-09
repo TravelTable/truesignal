@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Classroom Exporter (No OAuth)",
+  "version": "1.0.0",
+  "description": "Export Google Classroom courses, assignments, and announcements into a ZIP using your current browser session.",
+  "action": {
+    "default_title": "Classroom Exporter",
+    "default_popup": "window.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://classroom.google.com/*",
+    "https://drive.google.com/*",
+    "https://docs.google.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://classroom.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

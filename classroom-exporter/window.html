@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Classroom Exporter</title>
+    <style>
+      body { font-family: system-ui, Arial, sans-serif; margin: 16px; width: 320px; }
+      h1 { font-size: 16px; margin: 0 0 8px; }
+      .muted { color: #666; font-size: 12px; margin-bottom: 10px; }
+      button { width: 100%; padding: 10px 12px; border: none; background: #1a73e8; color: #fff; border-radius: 6px; font-weight: 600; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .progress { height: 6px; background: #eee; border-radius: 999px; overflow: hidden; margin-top: 10px; }
+      .bar { height: 100%; width: 0%; background: #1a73e8; transition: width 0.2s; }
+      .status { font-size: 12px; margin-top: 8px; min-height: 18px; white-space: pre-wrap;}
+      .note { font-size: 11px; color: #555; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Classroom Exporter</h1>
+    <div class="muted">Must be on <strong>classroom.google.com</strong> and already logged in.</div>
+
+    <button id="startBtn">Export My Classroom</button>
+
+    <div class="progress"><div id="bar" class="bar"></div></div>
+    <div id="status" class="status"></div>
+
+    <div class="note">
+      MVP exports structured <em>text snapshots</em> and <em>link lists</em> into a ZIP.
+    </div>
+
+    <!-- Load JSZip as a normal script so window.JSZip is definitely defined -->
+    <script src="libs/jszip.min.js"></script>
+    <!-- Popup logic (module ok) -->
+    <script type="module" src="window.js"></script>
+  </body>
+</html>
