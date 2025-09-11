@@ -123,7 +123,7 @@ const FinancialAnalysisV1 = z.object({
     lastPrice: z.coerce.number(),
     entry: z.coerce.number(),
     stop: z.coerce.number(),
-    takeProfits: z.array(z.coerce.number()).min(1).max(3), // allow 1–3
+    takeProfits: z.array(z.coerce.number()).min(1).max(3),
     positionSizePct: z.coerce.number(),
     deltasFromLast: z.object({
       entryPct: z.coerce.number(),
@@ -137,7 +137,7 @@ const FinancialAnalysisV1 = z.object({
     invalidation: z.array(z.string()).optional().default([]),
     volatilityNote: z.string().optional().default("")
   }),
-  signalsTop: z.array(SignalSchema).min(1).max(5),      // allow 1–5
+  signalsTop: z.array(SignalSchema).min(1).max(5),
   signalsMore: z.object({
     trend: z.array(SignalSchema).optional(),
     momentum: z.array(SignalSchema).optional(),
@@ -148,7 +148,7 @@ const FinancialAnalysisV1 = z.object({
   catalysts: z.array(z.object({
     type: z.string(),
     date: z.string().optional().default(""),
-    direction: z.string().optional(),                  // ← make optional
+    direction: z.string().optional(),
     note: z.string().optional().default("")
   })).optional().default([]),
   scenarios: z.array(z.object({
@@ -156,13 +156,23 @@ const FinancialAnalysisV1 = z.object({
     prob: z.coerce.number(),
     target: z.coerce.number(),
     triggers: z.array(z.string()).optional().default([])
-  })).min(1).max(3),                                   // allow 1–3
+  })).min(1).max(3),
   nextActions: z.array(z.object({
     id: z.string(),
     label: z.string(),
     checked: z.boolean()
   })).optional().default([]),
   rationale: z.array(z.string()).max(5).optional().default([]),
+
+  // NEW: structured AI news for the UI
+  newsDigest: z.array(z.object({
+    title: z.string(),
+    date: z.string().optional().default(""),
+    sentiment: z.string().optional().default("neutral"),
+    source: z.string().optional().default(""),
+    url: z.string().optional().default("")
+  })).optional().default([]),
+
   dataFreshness: z.object({
     priceAt: z.string().optional().default(""),
     newsWindow: z.object({
@@ -354,6 +364,23 @@ function makeAiFromFacts(facts) {
       }))
     : [];
 
+  // Build newsDigest from facts.news (compact facts) or leave empty
+  let newsDigest = [];
+  if (Array.isArray(facts?.news) && facts.news.length) {
+    // facts.news items look like { t, num }
+    const mapped = facts.news.map(n => ({
+      title: n?.t || "",
+      date: facts?.freshness?.priceAt || "",
+      sentiment: /\b(beat|surge|record|up|growth|raise|raised)\b/i.test(n?.t || "") ? "positive"
+               : /\b(miss|down|loss|lawsuit|probe|cut|cuts|slump|drop)\b/i.test(n?.t || "") ? "negative"
+               : "neutral",
+      source: "",
+      url: ""
+    }));
+    // run through summarizeNews for dedupe/cleanup
+    newsDigest = summarizeNews(mapped);
+  }
+
   return {
     schemaVersion: "1.1.0",
     ticker: facts?.tkr ?? "",
@@ -374,8 +401,8 @@ function makeAiFromFacts(facts) {
     risk: { riskScore: 50, invalidation: [], volatilityNote: "" },
     signalsTop: [
       { name: "Trend",    value: (facts?.trend?.above200 ? "Above 200SMA" : "Mixed"), state: "neutral", comment: "" },
-      { name: "Momentum", value: String(facts?.px?.r5d ?? "N/A"),                    state: "neutral", comment: "" },
-      { name: "Volume",   value: String(facts?.vol?.z  ?? "N/A"),                    state: "neutral", comment: "" }
+      { name: "Momentum", value: String(facts?.px?.r5d ?? "N/A"),                      state: "neutral", comment: "" },
+      { name: "Volume",   value: String(facts?.vol?.z  ?? "N/A"),                      state: "neutral", comment: "" }
     ],
     signalsMore: {},
     catalysts,
@@ -386,6 +413,7 @@ function makeAiFromFacts(facts) {
     ],
     nextActions: [],
     rationale: [],
+    newsDigest, // ← NEW
     dataFreshness: {
       priceAt: facts?.freshness?.priceAt || new Date().toISOString(),
       newsWindow: {},
@@ -435,17 +463,59 @@ async function yahooApi(path, params = {}, method = "GET", body = null, timeoutM
 
 // --- NEWS DIGEST (extractive, tiny) ---
 function summarizeNews(arr) {
-  return (arr || []).slice(0, 8).map(n => {
+  const items = Array.isArray(arr) ? arr.slice(0, 20) : [];
+  const norm = (s) => String(s || "").toLowerCase().replace(/[\W_]+/g, " ").trim();
+
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    if (a.length < b.length) [a, b] = [b, a];
+    if (b.length === 0) return a.length;
+    const prev = new Array(b.length + 1).fill(0).map((_, i) => i);
+    for (let i = 0; i < a.length; i++) {
+      const cur = [i + 1];
+      for (let j = 0; j < b.length; j++) {
+        const ins = prev[j + 1] + 1;
+        const del = cur[j] + 1;
+        const sub = prev[j] + (a[i] === b[j] ? 0 : 1);
+        cur.push(Math.min(ins, del, sub));
+      }
+      prev.splice(0, prev.length, ...cur);
+    }
+    return prev[prev.length - 1];
+  }
+
+  const seen = [];
+  const out = [];
+  for (const n of items) {
+    const title = (n.title || n.headline || "").trim();
+    if (!title) continue;
+
+    const key = norm(title);
+    let dup = false;
+    for (const s of seen) {
+      const dist = levenshtein(key, s) / Math.max(1, Math.max(key.length, s.length));
+      if (dist < 0.15) { dup = true; break; }
+    }
+    if (dup) continue;
+    seen.push(key);
+
+    // Sentiment from title keywords
+    const t = title.toLowerCase();
     let sentiment = "neutral";
-    if (/beat|growth|record|up|strong/i.test(n.title || "")) sentiment = "positive";
-    if (/miss|loss|down|lawsuit|weak/i.test(n.title || "")) sentiment = "negative";
-    return {
-      headline: n.title || "",
-      summary: (n.summary || "").slice(0, 120),
-      date: n.date || "",
-      sentiment
-    };
-  });
+    if (/\b(beat|beats|surge|record|up|growth|raise|raised)\b/.test(t)) sentiment = "positive";
+    if (/\b(miss|misses|down|loss|lawsuit|probe|cut|cuts|slump|drop)\b/.test(t)) {
+      sentiment = (sentiment === "positive") ? "mixed" : "negative";
+    }
+
+    const source = n.source || n.publisher || "";
+    const date   = n.date || n.published_at || n.time || "";
+    const url    = n.url || n.link || "";
+    const nums   = (title.match(/([+-]?\d+(?:\.\d+)?%|\$[0-9,]+)/g) || []).slice(0, 3);
+
+    out.push({ title, date, sentiment, source, url, nums });
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 // --- DERIVED FACTS BUILDER (ULTRA-COMPACT) ---
@@ -1033,7 +1103,7 @@ app.get("/api/analyst/:symbol", async (req, res) => {
   }
 });
 
-// Get company news
+// Get company news (raw from Python service)
 app.get("/api/news/:symbol", async (req, res) => {
   try {
     const { symbol } = req.params;
@@ -1041,6 +1111,23 @@ app.get("/api/news/:symbol", async (req, res) => {
     const data = await yahooApi("/news", { ticker: symbol, max_articles });
     res.set("Cache-Control", "public, max-age=30");
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NEW: Get AI-digested news (deduped, sentiment, numbers)
+app.get("/api/news-digest/:symbol", async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const raw = await yahooApi("/news", { ticker: symbol, max_articles: 20 });
+
+    // Python returns { news: [...] }; older shapes might be an array
+    const items = Array.isArray(raw?.news) ? raw.news : (Array.isArray(raw) ? raw : []);
+    const digest = summarizeNews(items);
+
+    res.set("Cache-Control", "public, max-age=60");
+    res.json({ ticker: symbol, newsDigest: digest });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
